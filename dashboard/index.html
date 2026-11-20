@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>样本偏差诊断看板 · Pointwise Delivery</title>
+<style>
+/* ============ 设计令牌（dataviz 参考调色板，浅色/深色双选） ============ */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6;  /* 蓝：总体/基准 */
+  --series-2: #eb6834;  /* 橙：样本/未修正 */
+  --series-3: #1baf7a;  /* 青绿：修正后 */
+  --series-4: #eda100;  /* 黄：敏感性 */
+  --series-5: #e87ba4;  /* 品红：回补 */
+  --seq-100: #cde2fb; --seq-300: #6da7ec; --seq-500: #256abf; --seq-700: #0d366b;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-text: #006300;
+  --diverge-neg: #2a78d6; --diverge-pos: #e34948; --diverge-mid: #f0efec;
+  --shadow: 0 1px 3px rgba(11,11,11,0.06), 0 4px 14px rgba(11,11,11,0.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --seq-100: #184f95; --seq-300: #3987e5; --seq-500: #6da7ec; --seq-700: #9ec5f4;
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #e66767;
+    --good-text: #0ca30c;
+    --diverge-neg: #3987e5; --diverge-pos: #e66767; --diverge-mid: #383835;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --series-4: #c98500; --series-5: #d55181;
+  --seq-100: #184f95; --seq-300: #3987e5; --seq-500: #6da7ec; --seq-700: #9ec5f4;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #e66767;
+  --good-text: #0ca30c;
+  --diverge-neg: #3987e5; --diverge-pos: #e66767; --diverge-mid: #383835;
+  --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--page);
+  color: var(--text-primary);
+  line-height: 1.55;
+  font-size: 14px;
+}
+.wrap { max-width: 1320px; margin: 0 auto; padding: 28px 28px 64px; }
+
+/* ============ 顶部 ============ */
+header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+h1 { font-size: 24px; margin: 0 0 6px; font-weight: 650; letter-spacing: -0.01em; }
+.subtitle { color: var(--text-secondary); font-size: 13px; margin: 0; }
+.top-actions { display: flex; gap: 8px; align-items: center; }
+button.btn {
+  font: inherit; font-size: 13px; color: var(--text-primary);
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer;
+}
+button.btn:hover { background: var(--surface-2); }
+button.btn[aria-pressed="true"] { border-color: var(--series-1); color: var(--series-1); }
+
+/* ============ 过滤器行（全局，一处） ============ */
+.filter-row {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 16px; margin-bottom: 22px;
+}
+.filter-row label { font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
+.filter-row select, .filter-row input {
+  font: inherit; font-size: 13px; color: var(--text-primary);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 9px; min-width: 130px;
+}
+.filter-row .scope-note { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+
+/* ============ 卡片与章节 ============ */
+section { margin-bottom: 30px; }
+.section-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; }
+.section-head h2 { font-size: 17px; font-weight: 650; margin: 0; }
+.section-head .desc { color: var(--text-muted); font-size: 12.5px; }
+.grid { display: grid; gap: 14px; }
+.grid.k4 { grid-template-columns: repeat(4, 1fr); }
+.grid.k3 { grid-template-columns: repeat(3, 1fr); }
+.grid.k2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 1080px) { .grid.k4 { grid-template-columns: repeat(2, 1fr); } .grid.k3 { grid-template-columns: 1fr; } .grid.k2 { grid-template-columns: 1fr; } }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow);
+  min-width: 0;
+}
+.card h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; color: var(--text-primary); }
+.card .hint { font-size: 12px; color: var(--text-muted); margin: 6px 0 0; }
+
+/* ============ 统计块 ============ */
+.stat { display: flex; flex-direction: column; gap: 4px; }
+.stat .label { font-size: 12.5px; color: var(--text-secondary); }
+.stat .value { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; }
+.stat .meta { font-size: 12px; color: var(--text-muted); }
+.stat .delta { font-size: 12.5px; font-weight: 600; }
+.delta.bad { color: var(--critical); }
+.delta.good { color: var(--good-text); }
+.delta.warn { color: var(--warning); }
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  width: fit-content;
+}
+.badge.critical { background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical); }
+.badge.warning { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.badge.good { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good-text); }
+.badge.neutral { background: var(--surface-2); color: var(--text-secondary); }
+
+/* ============ 表格 ============ */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--surface-1); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr:hover td { background: var(--surface-2); }
+td .mk { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 7px; vertical-align: middle; }
+.smd-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ============ 标签页 ============ */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--grid); margin-bottom: 16px; flex-wrap: wrap; }
+.tabs button {
+  font: inherit; font-size: 13.5px; padding: 9px 16px; background: none; border: none;
+  color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs button:hover { color: var(--text-primary); }
+.tabs button[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--series-1); font-weight: 650; }
+.tabpanel { display: none; }
+.tabpanel.active { display: block; }
+
+/* ============ 版本血缘条 ============ */
+.lineage { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+.lineage .node {
+  flex: 1; min-width: 210px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; position: relative;
+}
+.lineage .node .vid { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.lineage .node .vdesc { font-size: 12px; color: var(--text-secondary); }
+.lineage .node .vn { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.lineage .arrow { display: flex; align-items: center; color: var(--text-muted); font-size: 18px; }
+@media (max-width: 1080px) { .lineage .arrow { transform: rotate(90deg); } }
+
+/* ============ 工具提示 ============ */
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 50;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 9px; padding: 9px 12px; box-shadow: var(--shadow);
+  font-size: 12.5px; max-width: 280px; opacity: 0; transition: opacity 0.1s;
+}
+.tooltip.show { opacity: 1; }
+.tooltip .tt-title { font-weight: 650; margin-bottom: 5px; }
+.tooltip .tt-row { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); }
+.tooltip .tt-row .tt-val { margin-left: auto; font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.tooltip .tt-key { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* ============ SVG 图表 ============ */
+svg.chart { display: block; width: 100%; overflow: visible; }
+.axis-text { fill: var(--text-muted); font-size: 11px; }
+.grid-line { stroke: var(--grid); stroke-width: 1; }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+.bar { transition: opacity 0.12s; }
+.bar:hover { opacity: 0.82; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin: 4px 0 10px; }
+.legend .item { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 12px; height: 12px; border-radius: 3px; }
+.legend .linekey { width: 16px; height: 3px; border-radius: 2px; }
+
+/* ============ 告警/说明块 ============ */
+.callout {
+  border-radius: 10px; padding: 12px 15px; font-size: 13px;
+  border: 1px solid var(--border); margin-bottom: 12px;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.callout .icon { font-size: 15px; line-height: 1.4; }
+.callout.critical { background: color-mix(in srgb, var(--critical) 9%, var(--surface-1)); border-color: color-mix(in srgb, var(--critical) 35%, var(--border)); }
+.callout.warning { background: color-mix(in srgb, var(--warning) 10%, var(--surface-1)); }
+.callout.info { background: color-mix(in srgb, var(--series-1) 8%, var(--surface-1)); }
+.callout strong { font-weight: 650; }
+.callout ul { margin: 6px 0 0; padding-left: 18px; }
+.callout li { margin: 3px 0; }
+
+/* 表格视图切换 */
+.view-toggle { display: flex; gap: 6px; margin-left: auto; }
+.view-toggle button { font-size: 11.5px; padding: 3px 9px; }
+.native-table { display: none; }
+.native-table.show { display: block; }
+.chart-view.hide { display: none; }
+
+footer.foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--grid); color: var(--text-muted); font-size: 12px; }
+code.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>样本偏差诊断看板</h1>
+      <p class="subtitle">Pointwise Delivery · 配送订单抽样审计 — 覆盖率 · 偏差证据 · 修正方案 · 敏感性比较（原样本 V0 只读，修正全部生成独立版本）</p>
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="themeToggle" aria-pressed="false">🌓 深浅色</button>
+    </div>
+  </header>
+
+  <div class="filter-row">
+    <label>对比维度
+      <select id="dimSelect">
+        <option value="region">地区</option>
+        <option value="channel">渠道</option>
+        <option value="segment">客群分层</option>
+        <option value="isWeekend">周末/工作日</option>
+      </select>
+    </label>
+    <label>连续变量
+      <select id="numSelect">
+        <option value="amount">订单金额</option>
+        <option value="duration">履约时长</option>
+        <option value="hour">下单小时</option>
+        <option value="items">商品件数</option>
+      </select>
+    </label>
+    <label>估计量
+      <select id="estimandSelect">
+        <option value="duration_mean">平均履约时长</option>
+        <option value="ontime_rate">准时率</option>
+        <option value="amount_median">金额中位数</option>
+        <option value="sat_mean">平均满意度</option>
+      </select>
+    </label>
+    <span class="scope-note" id="scopeNote"></span>
+  </div>
+
+  <div id="app"></div>
+
+  <footer class="foot">
+    数据：确定性种子生成的合成总体（<span id="footN"></span>），含 PPS 有偏抽样、MNAR 缺失与定向回补。
+    所有修正版本均为独立快照（新权重列 / 新插补列），不覆盖 V0 原样本。统计方法：SMD、卡方齐性、K-S、IPF raking、事后分层、Rubin 多重插补、Kish 有效样本量。
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip" role="status"></div>
+
+<script src="data.js"></script>
+<script src="../src/lib/util.js"></script>
+<script src="../src/lib/diagnostics.js"></script>
+<script src="../src/lib/corrections.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
